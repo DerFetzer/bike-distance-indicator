@@ -25,7 +25,9 @@ pub fn init_hardware(mut dp: Peripherals, _cp: rtic::Peripherals) -> (DwTypeRead
     let clocks = rcc
         .cfgr
         .use_hse(16.mhz())
-        .sysclk(32.mhz())
+        .sysclk(64.mhz())
+        .pclk1(32.mhz())
+        .pclk2(64.mhz())
         .freeze(&mut flash.acr);
 
     let mut afio = dp.AFIO.constrain(&mut rcc.apb2);
