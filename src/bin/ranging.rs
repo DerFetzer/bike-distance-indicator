@@ -21,15 +21,13 @@ use rtic::app;
 use dw1000::{
     mac,
     ranging::{self, Message as _RangingMessage},
-    Message, RxConfig,
+    RxConfig,
 };
 
 use bike_distance_indicator::helper::get_delay;
 use bike_distance_indicator::types::{
     DwCsType, DwIrqType, DwSpiType, DwTypeReady, DwTypeReceiving, DwTypeSending,
 };
-use dw1000::mac::WriteFooter;
-use dw1000::time::Instant;
 use embedded_hal::blocking::delay::{DelayMs, DelayUs};
 #[cfg(feature = "anchor")]
 use rtic::cyccnt::U32Ext;
@@ -41,7 +39,7 @@ const ADDRESS: u16 = 0x1234;
 const ADDRESS: u16 = 0x1235;
 
 #[cfg(feature = "anchor")]
-const CTRL_PERIOD: u32 = 32_000_000;
+const CTRL_PERIOD: u32 = 64_000_000;
 
 #[app(device = stm32f1xx_hal::stm32, monotonic = rtic::cyccnt::CYCCNT, peripherals = true)]
 const APP: () = {
@@ -102,89 +100,6 @@ const APP: () = {
         }
     }
 
-    #[task(resources = [dw1000_ready, dw1000_sending], spawn = [start_receiving])]
-    fn handle_message(cx: handle_message::Context, rx_time: Instant, buf: [u8; 128], len: usize) {
-        let dw1000_ready: &mut Option<DwTypeReady> = cx.resources.dw1000_ready;
-
-        if let Some(mut dw1000) = dw1000_ready.take() {
-            let mut delay = get_delay();
-
-            let message = Message {
-                rx_time,
-                frame: mac::Frame::decode(&buf[..len], false).unwrap(),
-            };
-            let ping = ranging::Ping::decode::<DwSpiType, DwCsType>(&message);
-            let request = ranging::Request::decode::<DwSpiType, DwCsType>(&message);
-            let response = ranging::Response::decode::<DwSpiType, DwCsType>(&message);
-
-            if let Ok(Some(ping)) = ping {
-                defmt::info!("Sending ranging request...");
-
-                delay.delay_ms(10u32);
-
-                let sending = ranging::Request::new(&mut dw1000, &ping)
-                    .expect("Failed to initiate request")
-                    .send(dw1000)
-                    .expect("Failed to initiate request transmission");
-
-                *cx.resources.dw1000_sending = Some(sending);
-            } else if let Ok(Some(request)) = request {
-                defmt::info!("Sending ranging response...");
-
-                delay.delay_ms(10u32);
-
-                let sending = ranging::Response::new(&mut dw1000, &request)
-                    .expect("Failed to initiate response")
-                    .send(dw1000)
-                    .expect("Failed to initiate response transmission");
-
-                *cx.resources.dw1000_sending = Some(sending);
-            } else if let Ok(Some(response)) = response {
-                defmt::info!("Received ranging response");
-
-                let ping_rt = response.payload.ping_reply_time.value();
-                let ping_rtt = response.payload.ping_round_trip_time.value();
-                let request_rt = response.payload.request_reply_time.value();
-                let request_rtt = response
-                    .rx_time
-                    .duration_since(response.payload.request_tx_time)
-                    .value();
-
-                defmt::debug!(
-                    "ping_rt: {:?} ping_rtt: {:?} request_rt: {:?} request_rtt: {:?}",
-                    ping_rt,
-                    ping_rtt,
-                    request_rt,
-                    request_rtt
-                );
-
-                // If this is not a PAN ID and short address, it doesn't
-                // come from a compatible node. Ignore it.
-                if let mac::Address::Short(pan_id, addr) = response.source {
-                    // Ranging response received. Compute distance.
-                    let distance_mm = ranging::compute_distance_mm(&response);
-
-                    if let Ok(distance) = distance_mm {
-                        defmt::info!("{:04x}:{:04x} - {} mm", pan_id.0, addr.0, distance);
-                    } else {
-                        defmt::warn!(
-                            "Could not compute distance from {:04x}:{:04x}",
-                            pan_id.0,
-                            addr.0
-                        );
-                    }
-                }
-
-                cx.spawn.start_receiving().unwrap();
-                *cx.resources.dw1000_ready = Some(dw1000)
-            } else {
-                defmt::info!("Ignoring unknown message");
-                cx.spawn.start_receiving().unwrap();
-                *cx.resources.dw1000_ready = Some(dw1000)
-            };
-        }
-    }
-
     #[task(resources = [dw1000_ready, dw1000_sending, dw1000_receiving])]
     fn start_receiving(cx: start_receiving::Context) {
         let dw1000_ready: &mut Option<DwTypeReady> = cx.resources.dw1000_ready;
@@ -213,7 +128,7 @@ const APP: () = {
         }
     }
 
-    #[task(resources = [dw1000_ready, dw1000_receiving], spawn = [handle_message, start_receiving])]
+    #[task(resources = [dw1000_ready, dw1000_receiving, dw1000_sending], spawn = [start_receiving])]
     fn receive_message(cx: receive_message::Context) {
         let dw1000_receiving: &mut Option<DwTypeReceiving> = cx.resources.dw1000_receiving;
 
@@ -224,7 +139,7 @@ const APP: () = {
 
             defmt::info!("Receive message");
 
-            delay.delay_us(100u32);
+            delay.delay_us(1000u32);
 
             let result = dw1000.wait(&mut buf);
 
@@ -234,10 +149,79 @@ const APP: () = {
 
             match result {
                 Ok(message) => {
-                    // Ugly hack
-                    let mut encode_buf = [0; 128];
-                    let len = message.frame.encode(&mut encode_buf, WriteFooter::No);
-                    cx.spawn.handle_message(message.rx_time, buf, len).unwrap();
+                    let dw1000_ready: &mut Option<DwTypeReady> = cx.resources.dw1000_ready;
+
+                    if let Some(mut dw1000) = dw1000_ready.take() {
+                        let ping = ranging::Ping::decode::<DwSpiType, DwCsType>(&message);
+                        let request = ranging::Request::decode::<DwSpiType, DwCsType>(&message);
+                        let response = ranging::Response::decode::<DwSpiType, DwCsType>(&message);
+
+                        if let Ok(Some(ping)) = ping {
+                            defmt::info!("Sending ranging request...");
+
+                            delay.delay_ms(10u32);
+
+                            let sending = ranging::Request::new(&mut dw1000, &ping)
+                                .expect("Failed to initiate request")
+                                .send(dw1000)
+                                .expect("Failed to initiate request transmission");
+
+                            *cx.resources.dw1000_sending = Some(sending);
+                        } else if let Ok(Some(request)) = request {
+                            defmt::info!("Sending ranging response...");
+
+                            delay.delay_ms(10u32);
+
+                            let sending = ranging::Response::new(&mut dw1000, &request)
+                                .expect("Failed to initiate response")
+                                .send(dw1000)
+                                .expect("Failed to initiate response transmission");
+
+                            *cx.resources.dw1000_sending = Some(sending);
+                        } else if let Ok(Some(response)) = response {
+                            defmt::info!("Received ranging response");
+
+                            let ping_rt = response.payload.ping_reply_time.value();
+                            let ping_rtt = response.payload.ping_round_trip_time.value();
+                            let request_rt = response.payload.request_reply_time.value();
+                            let request_rtt = response
+                                .rx_time
+                                .duration_since(response.payload.request_tx_time)
+                                .value();
+
+                            defmt::debug!(
+                                "ping_rt: {:?} ping_rtt: {:?} request_rt: {:?} request_rtt: {:?}",
+                                ping_rt,
+                                ping_rtt,
+                                request_rt,
+                                request_rtt
+                            );
+
+                            // If this is not a PAN ID and short address, it doesn't
+                            // come from a compatible node. Ignore it.
+                            if let mac::Address::Short(pan_id, addr) = response.source {
+                                // Ranging response received. Compute distance.
+                                let distance_mm = ranging::compute_distance_mm(&response);
+
+                                if let Ok(distance) = distance_mm {
+                                    defmt::info!("{:04x}:{:04x} - {} mm", pan_id.0, addr.0, distance);
+                                } else {
+                                    defmt::warn!(
+                                        "Could not compute distance from {:04x}:{:04x}",
+                                        pan_id.0,
+                                        addr.0
+                                    );
+                                }
+                            }
+
+                            cx.spawn.start_receiving().unwrap();
+                            *cx.resources.dw1000_ready = Some(dw1000)
+                        } else {
+                            defmt::info!("Ignoring unknown message");
+                            cx.spawn.start_receiving().unwrap();
+                            *cx.resources.dw1000_ready = Some(dw1000)
+                        };
+                    }
                 }
                 Err(_) => {
                     defmt::info!("Could not receive message");
