@@ -5,6 +5,7 @@ use embedded_hal::digital::v2::OutputPin;
 use embedded_hal::spi::MODE_0;
 use stm32f1xx_hal::spi::Spi;
 use stm32f1xx_hal::{gpio::*, pac::Peripherals, prelude::*};
+use stm32f1xx_hal::pac::SPI1;
 
 pub fn init_hardware(mut dp: Peripherals, _cp: rtic::Peripherals) -> (DwTypeReady, DwIrqType) {
     defmt::info!("Init hardware");
@@ -63,7 +64,7 @@ pub fn init_hardware(mut dp: Peripherals, _cp: rtic::Peripherals) -> (DwTypeRead
         spi_pins,
         &mut afio.mapr,
         MODE_0,
-        2.mhz(),
+        2.mhz(), // Clock speed in INIT below 3MHz
         clocks,
         &mut rcc.apb2,
     );
@@ -76,6 +77,11 @@ pub fn init_hardware(mut dp: Peripherals, _cp: rtic::Peripherals) -> (DwTypeRead
     rst.set_high().unwrap();
 
     let mut dw1000 = DW1000::new(spi, spi_cs).init().unwrap();
+
+    // Increase clock speed after INIT
+    unsafe {
+        (*SPI1::ptr()).cr1.modify(|_, w| w.br().div4());
+    }
 
     dw1000.configure_leds(true, true, true, true, 5).unwrap();
 
