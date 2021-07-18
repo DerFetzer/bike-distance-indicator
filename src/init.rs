@@ -9,6 +9,10 @@ use stm32f1xx_hal::{gpio::*, pac::Peripherals, prelude::*};
 pub fn init_hardware(mut dp: Peripherals, _cp: rtic::Peripherals) -> (DwTypeReady, DwIrqType) {
     defmt::info!("Init hardware");
 
+    // Workaround for probe-run wfi issue
+    dp.DBGMCU.cr.write(|w| w.dbg_sleep().set_bit());
+    dp.RCC.ahbenr.write(|w| w.dma1en().set_bit());
+
     // Take ownership over the raw flash and rcc devices and convert them into the corresponding
     // HAL structs
     let mut flash = dp.FLASH.constrain();

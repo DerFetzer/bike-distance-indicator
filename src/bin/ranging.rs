@@ -21,23 +21,19 @@ use rtic::app;
 use dw1000::{
     mac,
     ranging::{self, Message as _RangingMessage},
-    Error, Message, RxConfig,
+    Message, RxConfig,
 };
 
 use bike_distance_indicator::helper::get_delay;
 use bike_distance_indicator::types::{
     DwCsType, DwIrqType, DwSpiType, DwTypeReady, DwTypeReceiving, DwTypeSending,
 };
-use cortex_m::asm::delay;
 use dw1000::mac::WriteFooter;
-use dw1000::ranging::{Ping, RxMessage};
 use dw1000::time::Instant;
-use embedded_hal::blocking::delay::DelayMs;
+use embedded_hal::blocking::delay::{DelayMs, DelayUs};
 #[cfg(feature = "anchor")]
 use rtic::cyccnt::U32Ext;
-use stm32f1xx_hal::gpio::gpioa::{PA4, PA5, PA6, PA7};
-use stm32f1xx_hal::gpio::{Alternate, ExtiPin, Floating, Input, Output, PushPull};
-use stm32f1xx_hal::spi::{Spi, Spi1NoRemap};
+use stm32f1xx_hal::gpio::ExtiPin;
 
 #[cfg(feature = "anchor")]
 const ADDRESS: u16 = 0x1234;
@@ -154,7 +150,7 @@ const APP: () = {
                     .duration_since(response.payload.request_tx_time)
                     .value();
 
-                defmt::info!(
+                defmt::debug!(
                     "ping_rt: {:?} ping_rtt: {:?} request_rt: {:?} request_rtt: {:?}",
                     ping_rt,
                     ping_rtt,
@@ -171,7 +167,11 @@ const APP: () = {
                     if let Ok(distance) = distance_mm {
                         defmt::info!("{:04x}:{:04x} - {} mm", pan_id.0, addr.0, distance);
                     } else {
-                        defmt::info!("{:04x}:{:04x} - mm", pan_id.0, addr.0);
+                        defmt::warn!(
+                            "Could not compute distance from {:04x}:{:04x}",
+                            pan_id.0,
+                            addr.0
+                        );
                     }
                 }
 
@@ -224,7 +224,7 @@ const APP: () = {
 
             defmt::info!("Receive message");
 
-            delay.delay_ms(10u32);
+            delay.delay_us(100u32);
 
             let result = dw1000.wait(&mut buf);
 
@@ -239,44 +239,8 @@ const APP: () = {
                     let len = message.frame.encode(&mut encode_buf, WriteFooter::No);
                     cx.spawn.handle_message(message.rx_time, buf, len).unwrap();
                 }
-                Err(nb::Error::WouldBlock) => {
-                    defmt::info!("Could not receive message => WouldBlock");
-                    cx.spawn.start_receiving().unwrap();
-                }
-                Err(nb::Error::Other(Error::Fcs)) => {
-                    defmt::info!("Could not receive message => 1");
-                    cx.spawn.start_receiving().unwrap();
-                }
-                Err(nb::Error::Other(Error::Phy)) => {
-                    defmt::info!("Could not receive message => 2");
-                    cx.spawn.start_receiving().unwrap();
-                }
-                Err(nb::Error::Other(Error::ReedSolomon)) => {
-                    defmt::info!("Could not receive message => 3");
-                    cx.spawn.start_receiving().unwrap();
-                }
-                Err(nb::Error::Other(Error::FrameWaitTimeout)) => {
-                    defmt::info!("Could not receive message => 4");
-                    cx.spawn.start_receiving().unwrap();
-                }
-                Err(nb::Error::Other(Error::Overrun)) => {
-                    defmt::info!("Could not receive message => 5");
-                    cx.spawn.start_receiving().unwrap();
-                }
-                Err(nb::Error::Other(Error::PreambleDetectionTimeout)) => {
-                    defmt::info!("Could not receive message => 6");
-                    cx.spawn.start_receiving().unwrap();
-                }
-                Err(nb::Error::Other(Error::SfdTimeout)) => {
-                    defmt::info!("Could not receive message => 7");
-                    cx.spawn.start_receiving().unwrap();
-                }
-                Err(nb::Error::Other(Error::FrameFilteringRejection)) => {
-                    defmt::info!("Could not receive message => 8");
-                    cx.spawn.start_receiving().unwrap();
-                }
                 Err(_) => {
-                    defmt::info!("Could not receive message => Other");
+                    defmt::info!("Could not receive message");
                     cx.spawn.start_receiving().unwrap();
                 }
             };
@@ -334,13 +298,6 @@ const APP: () = {
         cx.schedule
             .control(cx.scheduled + CTRL_PERIOD.cycles())
             .unwrap();
-    }
-
-    #[idle]
-    fn idle(_: idle::Context) -> ! {
-        loop {
-            cortex_m::asm::nop();
-        }
     }
 
     extern "C" {
