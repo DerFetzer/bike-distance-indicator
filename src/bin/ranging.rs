@@ -1,12 +1,3 @@
-//! Range measurement tag node
-//!
-//! This is a tag node used for range measurement. Tags use anchor nodes to
-//! measure their distance from those anchors.
-//!
-//! Currently, distance measurements have a highly inaccurate result. One reason
-//! that could account for this is the lack of antenna delay calibration, but
-//! it's possible that there are various hidden bugs that contribute to this.
-
 #![no_main]
 #![no_std]
 
