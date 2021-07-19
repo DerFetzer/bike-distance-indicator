@@ -203,8 +203,27 @@ const APP: () = {
                                 // Ranging response received. Compute distance.
                                 let distance_mm = ranging::compute_distance_mm(&response);
 
-                                if let Ok(distance) = distance_mm {
-                                    defmt::info!("{:04x}:{:04x} - {} mm", pan_id.0, addr.0, distance);
+                                if let Ok(distance_mm) = distance_mm {
+                                    let distance_cm = distance_mm / 10;
+                                    // Simple correction based on https://github.com/braun-embedded/rust-dw1000/issues/105
+                                    //
+                                    // <corrected distance> = <measured distance> + <range bias>
+                                    // <range bias> = <base part> + <distance-dependent part>
+                                    //
+                                    // <basepart> = -23 cm // for 16 MHz PRF, narrow-band channel
+                                    //
+                                    // Linear Regression:
+                                    //
+                                    // <measured distance> <= 1200: (30/1200)*x
+                                    // <measured distance> >  1200: (6/2500) *x + 27.12
+                                    let dep_part = if distance_cm <= 1200 {
+                                        (30f64 / 1200f64) * distance_cm as f64
+                                    }
+                                    else {
+                                        (6f64 / 2500f64) * distance_cm as f64 + 27.12f64
+                                    };
+                                    let corrected_distance = distance_cm as f64 - 23f64 + dep_part;
+                                    defmt::info!("{:04x}:{:04x} - {} cm - uncorrected {} cm", pan_id.0, addr.0, corrected_distance as u32, distance_cm);
                                 } else {
                                     defmt::warn!(
                                         "Could not compute distance from {:04x}:{:04x}",
