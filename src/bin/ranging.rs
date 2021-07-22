@@ -9,20 +9,13 @@ use bike_distance_indicator::init::init_hardware;
 
 use rtic::app;
 
-use dw1000::{
-    mac,
-    ranging::{self, Message as _RangingMessage},
-    RxConfig,
-};
-
-use bike_distance_indicator::helper::get_delay;
-use bike_distance_indicator::types::{
-    DwCsType, DwIrqType, DwSpiType, DwTypeReady, DwTypeReceiving, DwTypeSending,
-};
-use embedded_hal::blocking::delay::{DelayMs, DelayUs};
+use bike_distance_indicator::dw1000::{Dw1000MessageType, Dw1000State, Dw1000Wrapper};
+use bike_distance_indicator::error::Error;
+use bike_distance_indicator::types::Led1Type;
+use dw1000::mac;
+use embedded_hal::digital::v2::ToggleableOutputPin;
 #[cfg(feature = "anchor")]
 use rtic::cyccnt::U32Ext;
-use stm32f1xx_hal::gpio::ExtiPin;
 
 #[cfg(feature = "anchor")]
 const ADDRESS: u16 = 0x1234;
@@ -35,10 +28,8 @@ const CTRL_PERIOD: u32 = 64_000_000;
 #[app(device = stm32f1xx_hal::stm32, monotonic = rtic::cyccnt::CYCCNT, peripherals = true)]
 const APP: () = {
     struct Resources {
-        dw1000_ready: Option<DwTypeReady>,
-        dw1000_sending: Option<DwTypeSending>,
-        dw1000_receiving: Option<DwTypeReceiving>,
-        irq: DwIrqType,
+        dw1000: Dw1000Wrapper,
+        led1: Led1Type,
     }
 
     #[init(spawn = [control, start_receiving])]
@@ -50,7 +41,7 @@ const APP: () = {
         let dp = cx.device;
         let cp = cx.core;
 
-        let (mut dw1000, irq) = init_hardware(dp, cp);
+        let (mut dw1000, irq, led1) = init_hardware(dp, cp);
 
         defmt::info!("Set address");
 
@@ -68,211 +59,120 @@ const APP: () = {
         cx.spawn.control().unwrap();
 
         init::LateResources {
-            dw1000_ready: Some(dw1000),
-            dw1000_sending: None,
-            dw1000_receiving: None,
-            irq,
+            dw1000: Dw1000Wrapper::new(dw1000, irq),
+            led1,
         }
     }
 
-    #[task(resources = [dw1000_ready, dw1000_sending])]
+    #[task(resources = [dw1000])]
     fn send_ping(cx: send_ping::Context) {
-        let dw1000_ready: &mut Option<DwTypeReady> = cx.resources.dw1000_ready;
+        let dw1000: &mut Dw1000Wrapper = cx.resources.dw1000;
 
-        if let Some(mut dw1000) = dw1000_ready.take() {
-            defmt::info!("Sending ping...");
-
-            let sending = ranging::Ping::new(&mut dw1000)
-                .expect("Failed to initiate ping")
-                .send(dw1000)
-                .expect("Failed to initiate ping transmission");
-
-            *cx.resources.dw1000_sending = Some(sending);
+        match dw1000.send_ping() {
+            Ok(()) => {}
+            Err(Error::InvalidState) => {
+                defmt::warn!("Dw1000 not in required state: {:?}", dw1000.get_state())
+            }
+            Err(e) => defmt::error!("send_ping: {:?}", e),
         }
     }
 
-    #[task(resources = [dw1000_ready, dw1000_sending, dw1000_receiving])]
+    #[task(resources = [dw1000])]
     fn start_receiving(cx: start_receiving::Context) {
-        let dw1000_ready: &mut Option<DwTypeReady> = cx.resources.dw1000_ready;
+        let dw1000: &mut Dw1000Wrapper = cx.resources.dw1000;
 
-        if let Some(dw1000) = dw1000_ready.take() {
-            defmt::info!("Start receiving");
-
-            let receiving = dw1000
-                .receive(RxConfig::default())
-                .expect("Failed to receive message");
-
-            *cx.resources.dw1000_receiving = Some(receiving);
+        match dw1000.start_receiving() {
+            Ok(()) => {}
+            Err(Error::InvalidState) => {
+                defmt::warn!("Dw1000 not in required state: {:?}", dw1000.get_state())
+            }
+            Err(e) => defmt::error!("start_receiving: {:?}", e),
         }
     }
 
-    #[task(resources = [dw1000_ready, dw1000_receiving])]
+    #[task(resources = [dw1000])]
     fn finish_receiving(cx: finish_receiving::Context) {
-        let dw1000_receiving: &mut Option<DwTypeReceiving> = cx.resources.dw1000_receiving;
+        let dw1000: &mut Dw1000Wrapper = cx.resources.dw1000;
 
-        if let Some(dw1000) = dw1000_receiving.take() {
-            defmt::info!("Finish receiving");
-
-            let ready = dw1000.finish_receiving().unwrap();
-
-            *cx.resources.dw1000_ready = Some(ready);
+        match dw1000.finish_receiving() {
+            Ok(()) => {}
+            Err(Error::InvalidState) => {
+                defmt::warn!("Dw1000 not in required state: {:?}", dw1000.get_state())
+            }
+            Err(e) => defmt::error!("finish_receiving: {:?}", e),
         }
     }
 
-    #[task(resources = [dw1000_ready, dw1000_receiving, dw1000_sending], spawn = [start_receiving])]
+    #[task(resources = [dw1000])]
+    fn finish_sending(cx: finish_sending::Context) {
+        let dw1000: &mut Dw1000Wrapper = cx.resources.dw1000;
+
+        match dw1000.finish_sending() {
+            Ok(()) => {}
+            Err(Error::InvalidState) => {
+                defmt::warn!("Dw1000 not in required state: {:?}", dw1000.get_state())
+            }
+            Err(e) => defmt::error!("finish_sending: {:?}", e),
+        }
+    }
+
+    #[task(resources = [dw1000, led1], spawn = [start_receiving])]
     fn receive_message(cx: receive_message::Context) {
-        let dw1000_receiving: &mut Option<DwTypeReceiving> = cx.resources.dw1000_receiving;
+        let dw1000: &mut Dw1000Wrapper = cx.resources.dw1000;
+        let led1: &mut Led1Type = cx.resources.led1;
 
-        let mut delay = get_delay();
+        defmt::info!("state before receive: {:?}", dw1000.get_state());
 
-        if let Some(mut dw1000) = dw1000_receiving.take() {
-            let mut buf = [0; 128];
-
-            defmt::info!("Receive message");
-
-            delay.delay_us(1000u32);
-
-            let result = dw1000.wait(&mut buf);
-
-            let ready = dw1000.finish_receiving().unwrap();
-
-            *cx.resources.dw1000_ready = Some(ready);
-
-            match result {
-                Ok(message) => {
-                    let dw1000_ready: &mut Option<DwTypeReady> = cx.resources.dw1000_ready;
-
-                    if let Some(mut dw1000) = dw1000_ready.take() {
-                        let ping = ranging::Ping::decode::<DwSpiType, DwCsType>(&message);
-                        let request = ranging::Request::decode::<DwSpiType, DwCsType>(&message);
-                        let response = ranging::Response::decode::<DwSpiType, DwCsType>(&message);
-
-                        if let Ok(Some(ping)) = ping {
-                            defmt::info!("Sending ranging request...");
-
-                            delay.delay_ms(10u32);
-
-                            let sending = ranging::Request::new(&mut dw1000, &ping)
-                                .expect("Failed to initiate request")
-                                .send(dw1000)
-                                .expect("Failed to initiate request transmission");
-
-                            *cx.resources.dw1000_sending = Some(sending);
-                        } else if let Ok(Some(request)) = request {
-                            defmt::info!("Sending ranging response...");
-
-                            delay.delay_ms(10u32);
-
-                            let sending = ranging::Response::new(&mut dw1000, &request)
-                                .expect("Failed to initiate response")
-                                .send(dw1000)
-                                .expect("Failed to initiate response transmission");
-
-                            *cx.resources.dw1000_sending = Some(sending);
-                        } else if let Ok(Some(response)) = response {
-                            defmt::info!("Received ranging response");
-
-                            let ping_rt = response.payload.ping_reply_time.value();
-                            let ping_rtt = response.payload.ping_round_trip_time.value();
-                            let request_rt = response.payload.request_reply_time.value();
-                            let request_rtt = response
-                                .rx_time
-                                .duration_since(response.payload.request_tx_time)
-                                .value();
-
-                            defmt::debug!(
-                                "ping_rt: {:?} ping_rtt: {:?} request_rt: {:?} request_rtt: {:?}",
-                                ping_rt,
-                                ping_rtt,
-                                request_rt,
-                                request_rtt
-                            );
-
-                            // If this is not a PAN ID and short address, it doesn't
-                            // come from a compatible node. Ignore it.
-                            if let mac::Address::Short(pan_id, addr) = response.source {
-                                // Ranging response received. Compute distance.
-                                let distance_mm = ranging::compute_distance_mm(&response);
-
-                                if let Ok(distance_mm) = distance_mm {
-                                    let distance_cm = distance_mm / 10;
-                                    // Simple correction based on https://github.com/braun-embedded/rust-dw1000/issues/105
-                                    //
-                                    // <corrected distance> = <measured distance> + <range bias>
-                                    // <range bias> = <base part> + <distance-dependent part>
-                                    //
-                                    // <basepart> = -23 cm // for 16 MHz PRF, narrow-band channel
-                                    //
-                                    // Linear Regression:
-                                    //
-                                    // <measured distance> <= 1200: (30/1200)*x
-                                    // <measured distance> >  1200: (6/2500) *x + 27.12
-                                    let dep_part = if distance_cm <= 1200 {
-                                        (30f64 / 1200f64) * distance_cm as f64
-                                    }
-                                    else {
-                                        (6f64 / 2500f64) * distance_cm as f64 + 27.12f64
-                                    };
-                                    let corrected_distance = distance_cm as f64 - 23f64 + dep_part;
-                                    defmt::info!("{:04x}:{:04x} - {} cm - uncorrected {} cm", pan_id.0, addr.0, corrected_distance as u32, distance_cm);
-                                } else {
-                                    defmt::warn!(
-                                        "Could not compute distance from {:04x}:{:04x}",
-                                        pan_id.0,
-                                        addr.0
-                                    );
-                                }
-                            }
-
-                            cx.spawn.start_receiving().unwrap();
-                            *cx.resources.dw1000_ready = Some(dw1000)
-                        } else {
-                            defmt::info!("Ignoring unknown message");
-                            cx.spawn.start_receiving().unwrap();
-                            *cx.resources.dw1000_ready = Some(dw1000)
-                        };
-                    }
-                }
-                Err(_) => {
-                    defmt::info!("Could not receive message");
-                    cx.spawn.start_receiving().unwrap();
-                }
-            };
+        match dw1000.receive_message() {
+            Ok(Dw1000MessageType::RangingResponse) => {
+                led1.toggle().unwrap();
+                defmt::info!(
+                    "Received ranging response: {:?}cm ==> New filtered distance: {:?}cm",
+                    dw1000.get_last_distance(),
+                    dw1000.get_average_distance()
+                );
+            }
+            Ok(message_type) => defmt::info!("Received message: {:?}", message_type),
+            Err(Error::InvalidState) => {
+                defmt::warn!("Dw1000 not in required state: {:?}", dw1000.get_state())
+            }
+            Err(e) => defmt::error!("receive_message: {:?}", e),
+        };
+        defmt::info!("after receive_message state: {:?}", dw1000.get_state());
+        if dw1000.get_state() != Dw1000State::Sending {
+            cx.spawn.start_receiving().unwrap();
         }
     }
 
-    #[task(binds = EXTI0, resources = [dw1000_ready, dw1000_receiving, dw1000_sending, irq], spawn = [receive_message, start_receiving])]
+    #[task(binds = EXTI0, resources = [dw1000], spawn = [receive_message, start_receiving, finish_sending])]
     fn exti2(cx: exti2::Context) {
-        let irq: &mut DwIrqType = cx.resources.irq;
+        let dw1000: &mut Dw1000Wrapper = cx.resources.dw1000;
 
-        let dw1000_sending: &mut Option<DwTypeSending> = cx.resources.dw1000_sending;
-        let dw1000_receiving: &mut Option<DwTypeReceiving> = cx.resources.dw1000_receiving;
+        dw1000.handle_interrupt().unwrap();
 
-        irq.clear_interrupt_pending_bit();
-
-        if let Some(dw1000) = dw1000_sending.take() {
-            defmt::info!("Finish sending");
-
-            let ready = dw1000.finish_sending().expect("Failed to finish sending");
-            cx.spawn.start_receiving().unwrap();
-
-            *cx.resources.dw1000_ready = Some(ready);
-        } else if let Some(_) = dw1000_receiving {
-            cx.spawn.receive_message().unwrap();
+        match dw1000.get_state() {
+            Dw1000State::Ready => defmt::warn!("Interrupt in ready state"),
+            Dw1000State::Sending => {
+                cx.spawn.finish_sending().unwrap();
+                cx.spawn.start_receiving().unwrap();
+            }
+            Dw1000State::Receiving => {
+                cx.spawn.receive_message().unwrap();
+            }
         }
     }
 
     #[cfg(feature = "anchor")]
-    #[task(schedule = [control], spawn = [start_receiving, finish_receiving, send_ping], resources = [dw1000_receiving])]
+    #[task(schedule = [control], spawn = [start_receiving, finish_receiving, send_ping], resources = [dw1000])]
     fn control(cx: control::Context) {
         #[cfg(feature = "anchor")]
         static mut COUNT: u8 = 0;
         #[cfg(feature = "anchor")]
         static mut RX_ACTIVE: bool = false;
 
-        let dw1000_receiving: &mut Option<DwTypeReceiving> = cx.resources.dw1000_receiving;
+        let dw1000: &mut Dw1000Wrapper = cx.resources.dw1000;
 
-        if dw1000_receiving.is_some() {
+        if let Dw1000State::Receiving = dw1000.get_state() {
             if !*RX_ACTIVE {
                 *COUNT = 0
             }

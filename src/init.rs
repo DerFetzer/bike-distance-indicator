@@ -1,13 +1,16 @@
 use crate::helper::get_delay;
-use crate::types::{DwIrqType, DwTypeReady};
+use crate::types::{DwIrqType, DwTypeReady, Led1Type};
 use dw1000::DW1000;
 use embedded_hal::digital::v2::OutputPin;
 use embedded_hal::spi::MODE_0;
+use stm32f1xx_hal::pac::SPI1;
 use stm32f1xx_hal::spi::Spi;
 use stm32f1xx_hal::{gpio::*, pac::Peripherals, prelude::*};
-use stm32f1xx_hal::pac::SPI1;
 
-pub fn init_hardware(mut dp: Peripherals, _cp: rtic::Peripherals) -> (DwTypeReady, DwIrqType) {
+pub fn init_hardware(
+    mut dp: Peripherals,
+    _cp: rtic::Peripherals,
+) -> (DwTypeReady, DwIrqType, Led1Type) {
     defmt::info!("Init hardware");
 
     // Workaround for probe-run wfi issue
@@ -57,6 +60,10 @@ pub fn init_hardware(mut dp: Peripherals, _cp: rtic::Peripherals) -> (DwTypeRead
     irq.enable_interrupt(&mut dp.EXTI);
     irq.trigger_on_edge(&mut dp.EXTI, Edge::RISING);
 
+    let led1 = gpioa
+        .pa2
+        .into_push_pull_output_with_state(&mut gpioa.crl, State::Low);
+
     defmt::info!("Init spi");
 
     let spi = Spi::spi1(
@@ -73,7 +80,7 @@ pub fn init_hardware(mut dp: Peripherals, _cp: rtic::Peripherals) -> (DwTypeRead
 
     let mut delay = get_delay();
 
-    delay.delay_ms(2u32); // Reset
+    delay.delay_ms(10u32); // Reset
     rst.set_high().unwrap();
 
     let mut dw1000 = DW1000::new(spi, spi_cs).init().unwrap();
@@ -104,5 +111,5 @@ pub fn init_hardware(mut dp: Peripherals, _cp: rtic::Peripherals) -> (DwTypeRead
 
     defmt::info!("Init hardware finished");
 
-    (dw1000, irq)
+    (dw1000, irq, led1)
 }

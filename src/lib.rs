@@ -1,5 +1,7 @@
 #![no_std]
 
+pub mod dw1000;
+pub mod error;
 pub mod helper;
 pub mod init;
 pub mod types;
