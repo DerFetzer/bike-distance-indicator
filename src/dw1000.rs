@@ -225,23 +225,27 @@ impl Dw1000Wrapper {
                     // Ranging response received. Compute distance.
                     let distance_mm = ranging::compute_distance_mm(&response);
 
-                    if let Ok(distance_mm) = distance_mm {
-                        let distance_cm = distance_mm / 10;
-                        let corrected_distance = Dw1000Wrapper::correct_distance(distance_cm);
-                        defmt::info!(
-                            "{:04x}:{:04x} - {} cm - uncorrected {} cm",
-                            pan_id.0,
-                            addr.0,
-                            corrected_distance as u32,
-                            distance_cm
-                        );
-                        self.update_distance(corrected_distance);
-                    } else {
-                        defmt::warn!(
-                            "Could not compute distance from {:04x}:{:04x}",
-                            pan_id.0,
-                            addr.0
-                        );
+                    match distance_mm {
+                        Ok(distance_mm) if distance_mm < 20_000 => {
+                            let distance_cm = distance_mm / 10;
+                            let corrected_distance = Dw1000Wrapper::correct_distance(distance_cm);
+                            defmt::info!(
+                                "{:04x}:{:04x} - {} cm - uncorrected {} cm",
+                                pan_id.0,
+                                addr.0,
+                                corrected_distance as u32,
+                                distance_cm
+                            );
+                            self.update_distance(corrected_distance);
+                        }
+                        Ok(distance_mm) => defmt::warn!("Computed distance too large: {:?}mm", distance_mm),
+                        Err(_) => {
+                            defmt::warn!(
+                                "Could not compute distance from {:04x}:{:04x}",
+                                pan_id.0,
+                                addr.0
+                            );
+                        }
                     }
                 }
                 self.dw1000_ready = Some(dw1000);
@@ -273,7 +277,7 @@ impl Dw1000Wrapper {
         } else {
             (6f32 / 2500f32) * distance_cm as f32 + 27.12f32
         };
-        (distance_cm as f32 - 23f32 + dep_part) as u64
+        (distance_cm as f32 - 23f32 + dep_part).max(0f32) as u64
     }
 
     fn update_distance(&mut self, distance_cm: u64) {
