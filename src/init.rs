@@ -6,11 +6,15 @@ use embedded_hal::spi::MODE_0;
 use stm32f1xx_hal::pac::SPI1;
 use stm32f1xx_hal::spi::Spi;
 use stm32f1xx_hal::{gpio::*, pac::Peripherals, prelude::*};
+use ws2812_spi::{Ws2812, MODE as WS_MODE};
+use crate::indicator::LedIndicator;
+use crate::battery::BatteryMonitor;
+use stm32f1xx_hal::adc::Adc;
 
 pub fn init_hardware(
     mut dp: Peripherals,
     _cp: rtic::Peripherals,
-) -> (DwTypeReady, DwIrqType, Led1Type) {
+) -> (DwTypeReady, DwIrqType, Led1Type, LedIndicator, BatteryMonitor) {
     defmt::info!("Init hardware");
 
     // Workaround for probe-run wfi issue
@@ -56,6 +60,12 @@ pub fn init_hardware(
 
     let mut irq = gpiob.pb0.into_floating_input(&mut gpiob.crl);
 
+    let ws_pins = (
+        gpiob.pb13.into_alternate_push_pull(&mut gpiob.crh),
+        gpiob.pb14.into_floating_input(&mut gpiob.crh),
+        gpiob.pb15.into_alternate_push_pull(&mut gpiob.crh),
+    );
+
     irq.make_interrupt_source(&mut afio);
     irq.enable_interrupt(&mut dp.EXTI);
     irq.trigger_on_edge(&mut dp.EXTI, Edge::RISING);
@@ -64,9 +74,15 @@ pub fn init_hardware(
         .pa2
         .into_push_pull_output_with_state(&mut gpioa.crl, State::Low);
 
-    defmt::info!("Init spi");
+    let bat_pin = gpioa.pa3.into_analog(&mut gpioa.crl);
 
-    let spi = Spi::spi1(
+    defmt::info!("Init ADC");
+
+    let adc = Adc::adc1(dp.ADC1, &mut rcc.apb2, clocks);
+
+    defmt::info!("Init SPI");
+
+    let spi1 = Spi::spi1(
         dp.SPI1,
         spi_pins,
         &mut afio.mapr,
@@ -76,6 +92,20 @@ pub fn init_hardware(
         &mut rcc.apb2,
     );
 
+    let spi2 = Spi::spi2(dp.SPI2, ws_pins, WS_MODE, 3.mhz(), clocks, &mut rcc.apb1);
+
+    defmt::info!("Init WS2812");
+
+    let ws = Ws2812::new(spi2);
+
+    defmt::info!("Init Indicator");
+
+    let led_indicator = LedIndicator::new(ws);
+
+    defmt::info!("Init battery monitor");
+
+    let battery_monitor = BatteryMonitor::new(adc, bat_pin);
+
     defmt::info!("Init DW1000");
 
     let mut delay = get_delay();
@@ -83,7 +113,7 @@ pub fn init_hardware(
     delay.delay_ms(10u32); // Reset
     rst.set_high().unwrap();
 
-    let mut dw1000 = DW1000::new(spi, spi_cs).init().unwrap();
+    let mut dw1000 = DW1000::new(spi1, spi_cs).init().unwrap();
 
     // Increase clock speed after INIT
     unsafe {
@@ -111,5 +141,5 @@ pub fn init_hardware(
 
     defmt::info!("Init hardware finished");
 
-    (dw1000, irq, led1)
+    (dw1000, irq, led1, led_indicator, battery_monitor)
 }

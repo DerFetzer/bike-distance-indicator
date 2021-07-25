@@ -14,8 +14,12 @@ use bike_distance_indicator::error::Error;
 use bike_distance_indicator::types::Led1Type;
 use dw1000::mac;
 use embedded_hal::digital::v2::ToggleableOutputPin;
-#[cfg(feature = "anchor")]
 use rtic::cyccnt::U32Ext;
+use bike_distance_indicator::indicator::{LedIndicator, DistanceIndicator};
+use bike_distance_indicator::battery::{BatteryMonitor, BatteryState};
+use stm32f1xx_hal::pac::PWR;
+use bike_distance_indicator::helper::get_delay;
+use embedded_hal::blocking::delay::DelayMs;
 
 #[cfg(feature = "anchor")]
 const ADDRESS: u16 = 0x1234;
@@ -24,15 +28,18 @@ const ADDRESS: u16 = 0x1235;
 
 #[cfg(feature = "anchor")]
 const CTRL_PERIOD: u32 = 64_000_000;
+const BATTERY_PERIOD: u32 = 256_000_000;
 
 #[app(device = stm32f1xx_hal::stm32, monotonic = rtic::cyccnt::CYCCNT, peripherals = true)]
 const APP: () = {
     struct Resources {
         dw1000: Dw1000Wrapper,
         led1: Led1Type,
+        indicator: LedIndicator,
+        battery_monitor: BatteryMonitor,
     }
 
-    #[init(spawn = [control, start_receiving])]
+    #[init(spawn = [control, start_receiving, check_battery_voltage])]
     fn init(mut cx: init::Context) -> init::LateResources {
         cx.core.DWT.enable_cycle_counter();
 
@@ -41,7 +48,7 @@ const APP: () = {
         let dp = cx.device;
         let cp = cx.core;
 
-        let (mut dw1000, irq, led1) = init_hardware(dp, cp);
+        let (mut dw1000, irq, led1, indicator, battery_monitor) = init_hardware(dp, cp);
 
         defmt::info!("Set address");
 
@@ -54,6 +61,7 @@ const APP: () = {
             .expect("Failed to set address");
 
         cx.spawn.start_receiving().unwrap();
+        cx.spawn.check_battery_voltage().unwrap();
 
         #[cfg(feature = "anchor")]
         cx.spawn.control().unwrap();
@@ -61,6 +69,8 @@ const APP: () = {
         init::LateResources {
             dw1000: Dw1000Wrapper::new(dw1000, irq),
             led1,
+            indicator,
+            battery_monitor,
         }
     }
 
@@ -116,7 +126,7 @@ const APP: () = {
         }
     }
 
-    #[task(resources = [dw1000, led1], spawn = [start_receiving])]
+    #[task(resources = [dw1000, led1], spawn = [start_receiving, set_indicator])]
     fn receive_message(cx: receive_message::Context) {
         let dw1000: &mut Dw1000Wrapper = cx.resources.dw1000;
         let led1: &mut Led1Type = cx.resources.led1;
@@ -126,11 +136,13 @@ const APP: () = {
         match dw1000.receive_message() {
             Ok(Dw1000MessageType::RangingResponse) => {
                 led1.toggle().unwrap();
+                let average_distance = dw1000.get_average_distance();
                 defmt::info!(
                     "Received ranging response: {:?}cm ==> New filtered distance: {:?}cm",
                     dw1000.get_last_distance(),
-                    dw1000.get_average_distance()
+                    average_distance
                 );
+                cx.spawn.set_indicator(average_distance, 100, 20).unwrap();
             }
             Ok(message_type) => defmt::info!("Received message: {:?}", message_type),
             Err(Error::InvalidState) => {
@@ -142,6 +154,13 @@ const APP: () = {
         if dw1000.get_state() != Dw1000State::Sending {
             cx.spawn.start_receiving().unwrap();
         }
+    }
+
+    #[task(resources = [indicator])]
+    fn set_indicator(cx: set_indicator::Context, current_distance: u64, target_distance: u64, tolerance: u64) {
+        let indicator: &mut LedIndicator = cx.resources.indicator;
+
+        indicator.update_range(current_distance, target_distance, tolerance).unwrap();
     }
 
     #[task(binds = EXTI0, resources = [dw1000], spawn = [receive_message, start_receiving, finish_sending])]
@@ -159,6 +178,50 @@ const APP: () = {
             Dw1000State::Receiving => {
                 cx.spawn.receive_message().unwrap();
             }
+        }
+    }
+
+    #[task(resources = [battery_monitor], spawn = [shutdown], schedule = [check_battery_voltage])]
+    fn check_battery_voltage(cx: check_battery_voltage::Context) {
+        let battery_monitor: &mut BatteryMonitor = cx.resources.battery_monitor;
+
+        match battery_monitor.check_battery() {
+            BatteryState::Ok(v) => {
+                defmt::info!("Battery Ok, voltage: {:?}mV", v);
+            }
+            BatteryState::Empty(v) => {
+                defmt::info!("Battery Empty, voltage: {:?}mV", v);
+                cx.spawn.shutdown().unwrap();
+            }
+            BatteryState::Unknown => {}
+        };
+
+        cx.schedule
+            .check_battery_voltage(cx.scheduled + BATTERY_PERIOD.cycles())
+            .unwrap();
+    }
+
+    #[task(resources = [indicator, dw1000])]
+    fn shutdown(cx: shutdown::Context) {
+        let indicator: &mut LedIndicator = cx.resources.indicator;
+        let dw1000: &mut Dw1000Wrapper = cx.resources.dw1000;
+
+        let mut delay = get_delay();
+
+        defmt::error!("Shutdown!");
+
+        delay.delay_ms(500u32);
+
+        dw1000.shutdown();
+        indicator.shutdown();
+
+        unsafe {
+            let mut cmp = cortex_m::Peripherals::steal();
+            cmp.SCB.set_sleepdeep();
+            (*PWR::ptr()).cr.write(|w| w.pdds().set_bit().cwuf().set_bit());
+
+            cortex_m::asm::wfi();
+            unreachable!();
         }
     }
 

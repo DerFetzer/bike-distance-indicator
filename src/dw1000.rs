@@ -129,6 +129,10 @@ impl Dw1000Wrapper {
                             break Err(nb::Error::WouldBlock);
                         } else {
                             defmt::warn!("receive_message retry");
+
+                            let sys_status = dw1000.ll().sys_status().read().unwrap();
+                            defmt::info!("dw1000: {:?}", defmt::Debug2Format(&sys_status));
+                            defmt::info!("ldedone: {:?}, rxdfr: {:?}, rxfcg: {:?}, rxfce: {}, ldeerr: {:?}", sys_status.ldedone(), sys_status.rxdfr(), sys_status.rxfcg(), sys_status.rxfce(), sys_status.ldeerr());
                             delay.delay_us(1000u32);
                             i += 1;
                         }
@@ -314,5 +318,10 @@ impl Dw1000Wrapper {
         } else {
             Err(Error::InvalidState)
         }
+    }
+
+    pub fn shutdown(&mut self) {
+        let _ = self.finish_sending();
+        let _ = self.finish_receiving();
     }
 }

@@ -5,6 +5,8 @@ pub mod error;
 pub mod helper;
 pub mod init;
 pub mod types;
+pub mod indicator;
+pub mod battery;
 
 use core::sync::atomic::{AtomicUsize, Ordering};
 
