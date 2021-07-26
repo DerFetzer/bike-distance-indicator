@@ -12,7 +12,7 @@ use stm32f1xx_hal::{gpio::*, pac::Peripherals, prelude::*};
 use ws2812_spi::{Ws2812, MODE as WS_MODE};
 
 pub fn init_hardware(
-    mut dp: Peripherals,
+    dp: Peripherals,
     _cp: rtic::Peripherals,
 ) -> (
     DwTypeReady,
@@ -78,8 +78,8 @@ pub fn init_hardware(
     );
 
     irq.make_interrupt_source(&mut afio);
-    irq.enable_interrupt(&mut dp.EXTI);
-    irq.trigger_on_edge(&mut dp.EXTI, Edge::RISING);
+    irq.enable_interrupt(&dp.EXTI);
+    irq.trigger_on_edge(&dp.EXTI, Edge::RISING);
 
     let led1 = gpioa
         .pa2

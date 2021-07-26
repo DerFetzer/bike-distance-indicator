@@ -32,13 +32,13 @@ pub struct Dw1000Wrapper {
 
 impl Dw1000Wrapper {
     pub fn new(dw1000: DwTypeReady, irq: DwIrqType) -> Self {
-        return Dw1000Wrapper {
+        Dw1000Wrapper {
             dw1000_ready: Some(dw1000),
             dw1000_sending: None,
             dw1000_receiving: None,
             irq,
             distance_history: [0; 10],
-        };
+        }
     }
 
     pub fn start_receiving(&mut self) -> Result<(), Error> {
