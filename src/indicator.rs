@@ -94,6 +94,11 @@ impl DistanceIndicator for LedIndicator {
         Ok(range)
     }
 
+    fn set_out_of_range(&mut self) {
+        self.set_range(DistanceRange::OutOfRange);
+        self.update_leds();
+    }
+
     fn get_range(&self) -> DistanceRange {
         self.range
     }
