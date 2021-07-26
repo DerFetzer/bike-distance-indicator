@@ -91,9 +91,9 @@ impl DistanceIndicator for LedIndicator {
         let range = match current_distance {
             d if d < target_distance - 2 * tolerance => DistanceRange::Short,
             d if d < target_distance - tolerance => DistanceRange::OkShort,
-            d if d > target_distance + tolerance => DistanceRange::OkLong,
-            d if d > target_distance + 2 * tolerance => DistanceRange::Long,
-            _ => DistanceRange::Ok,
+            d if d < target_distance + tolerance => DistanceRange::Ok,
+            d if d < target_distance + 2 * tolerance => DistanceRange::OkLong,
+            _ => DistanceRange::Long,
         };
 
         if range != self.range {
