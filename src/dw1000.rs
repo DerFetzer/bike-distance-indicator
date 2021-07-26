@@ -132,7 +132,14 @@ impl Dw1000Wrapper {
 
                             let sys_status = dw1000.ll().sys_status().read().unwrap();
                             defmt::info!("dw1000: {:?}", defmt::Debug2Format(&sys_status));
-                            defmt::info!("ldedone: {:?}, rxdfr: {:?}, rxfcg: {:?}, rxfce: {}, ldeerr: {:?}", sys_status.ldedone(), sys_status.rxdfr(), sys_status.rxfcg(), sys_status.rxfce(), sys_status.ldeerr());
+                            defmt::info!(
+                                "ldedone: {:?}, rxdfr: {:?}, rxfcg: {:?}, rxfce: {}, ldeerr: {:?}",
+                                sys_status.ldedone(),
+                                sys_status.rxdfr(),
+                                sys_status.rxfcg(),
+                                sys_status.rxfce(),
+                                sys_status.ldeerr()
+                            );
                             delay.delay_us(1000u32);
                             i += 1;
                         }
@@ -241,7 +248,9 @@ impl Dw1000Wrapper {
                             self.update_distance(corrected_distance);
                             valid = true;
                         }
-                        Ok(distance_mm) => defmt::warn!("Computed distance too large: {:?}mm", distance_mm),
+                        Ok(distance_mm) => {
+                            defmt::warn!("Computed distance too large: {:?}mm", distance_mm)
+                        }
                         Err(_) => {
                             defmt::warn!(
                                 "Could not compute distance from {:04x}:{:04x}",

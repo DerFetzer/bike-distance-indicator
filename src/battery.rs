@@ -18,10 +18,7 @@ pub struct BatteryMonitor {
 
 impl BatteryMonitor {
     pub fn new(adc: BatteryAdcType, ch: BatteryChType) -> Self {
-        BatteryMonitor {
-            adc,
-            ch,
-        }
+        BatteryMonitor { adc, ch }
     }
 
     pub fn read_battery_voltage(&mut self) -> u16 {

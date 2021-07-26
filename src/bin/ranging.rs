@@ -9,17 +9,17 @@ use bike_distance_indicator::init::init_hardware;
 
 use rtic::app;
 
+use bike_distance_indicator::battery::{BatteryMonitor, BatteryState};
 use bike_distance_indicator::dw1000::{Dw1000MessageType, Dw1000State, Dw1000Wrapper};
 use bike_distance_indicator::error::Error;
+use bike_distance_indicator::helper::get_delay;
+use bike_distance_indicator::indicator::{DistanceIndicator, LedIndicator};
 use bike_distance_indicator::types::Led1Type;
 use dw1000::mac;
+use embedded_hal::blocking::delay::DelayMs;
 use embedded_hal::digital::v2::ToggleableOutputPin;
 use rtic::cyccnt::U32Ext;
-use bike_distance_indicator::indicator::{LedIndicator, DistanceIndicator};
-use bike_distance_indicator::battery::{BatteryMonitor, BatteryState};
 use stm32f1xx_hal::pac::PWR;
-use bike_distance_indicator::helper::get_delay;
-use embedded_hal::blocking::delay::DelayMs;
 
 #[cfg(feature = "anchor")]
 const ADDRESS: u16 = 0x1234;
@@ -173,10 +173,17 @@ const APP: () = {
     }
 
     #[task(resources = [indicator])]
-    fn set_indicator(cx: set_indicator::Context, current_distance: u64, target_distance: u64, tolerance: u64) {
+    fn set_indicator(
+        cx: set_indicator::Context,
+        current_distance: u64,
+        target_distance: u64,
+        tolerance: u64,
+    ) {
         let indicator: &mut LedIndicator = cx.resources.indicator;
 
-        indicator.update_range(current_distance, target_distance, tolerance).unwrap();
+        indicator
+            .update_range(current_distance, target_distance, tolerance)
+            .unwrap();
     }
 
     #[task(binds = EXTI0, resources = [dw1000], spawn = [receive_message, start_receiving, finish_sending])]
@@ -234,7 +241,9 @@ const APP: () = {
         unsafe {
             let mut cmp = cortex_m::Peripherals::steal();
             cmp.SCB.set_sleepdeep();
-            (*PWR::ptr()).cr.write(|w| w.pdds().set_bit().cwuf().set_bit());
+            (*PWR::ptr())
+                .cr
+                .write(|w| w.pdds().set_bit().cwuf().set_bit());
 
             cortex_m::asm::wfi();
             unreachable!();

@@ -1,20 +1,26 @@
+use crate::battery::BatteryMonitor;
 use crate::helper::get_delay;
+use crate::indicator::LedIndicator;
 use crate::types::{DwIrqType, DwTypeReady, Led1Type};
 use dw1000::DW1000;
-use embedded_hal::digital::v2::{OutputPin, InputPin};
+use embedded_hal::digital::v2::{InputPin, OutputPin};
 use embedded_hal::spi::MODE_0;
+use stm32f1xx_hal::adc::Adc;
 use stm32f1xx_hal::pac::SPI1;
 use stm32f1xx_hal::spi::Spi;
 use stm32f1xx_hal::{gpio::*, pac::Peripherals, prelude::*};
 use ws2812_spi::{Ws2812, MODE as WS_MODE};
-use crate::indicator::LedIndicator;
-use crate::battery::BatteryMonitor;
-use stm32f1xx_hal::adc::Adc;
 
 pub fn init_hardware(
     mut dp: Peripherals,
     _cp: rtic::Peripherals,
-) -> (DwTypeReady, DwIrqType, Led1Type, LedIndicator, BatteryMonitor) {
+) -> (
+    DwTypeReady,
+    DwIrqType,
+    Led1Type,
+    LedIndicator,
+    BatteryMonitor,
+) {
     defmt::info!("Init hardware");
 
     // Workaround for probe-run wfi issue
@@ -48,8 +54,7 @@ pub fn init_hardware(
 
     defmt::info!("Init pins");
 
-    let rst_inp = gpiob
-        .pb12.into_floating_input(&mut gpiob.crh);
+    let rst_inp = gpiob.pb12.into_floating_input(&mut gpiob.crh);
 
     while rst_inp.is_low().unwrap() {}
     delay.delay_ms(10u32);

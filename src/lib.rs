@@ -1,12 +1,12 @@
 #![no_std]
 
+pub mod battery;
 pub mod dw1000;
 pub mod error;
 pub mod helper;
+pub mod indicator;
 pub mod init;
 pub mod types;
-pub mod indicator;
-pub mod battery;
 
 use core::sync::atomic::{AtomicUsize, Ordering};
 

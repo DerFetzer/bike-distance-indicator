@@ -1,6 +1,6 @@
-use defmt::Format;
 use crate::types::WsType;
-use smart_leds::{RGB8, SmartLedsWrite};
+use defmt::Format;
+use smart_leds::{SmartLedsWrite, RGB8};
 
 #[derive(Debug, Clone, Copy, PartialEq, Format)]
 pub enum DistanceRange {
@@ -9,13 +9,18 @@ pub enum DistanceRange {
     OkLong,
     Ok,
     OkShort,
-    Short
+    Short,
 }
 
 pub trait DistanceIndicator {
     type Error;
 
-    fn update_range(&mut self, current_distance: u64, target_distance: u64, tolerance: u64) -> Result<DistanceRange, Self::Error>;
+    fn update_range(
+        &mut self,
+        current_distance: u64,
+        target_distance: u64,
+        tolerance: u64,
+    ) -> Result<DistanceRange, Self::Error>;
     fn set_out_of_range(&mut self) {
         self.set_range(DistanceRange::OutOfRange);
     }
@@ -26,7 +31,7 @@ pub trait DistanceIndicator {
 
 pub struct LedIndicator {
     ws: WsType,
-    range: DistanceRange
+    range: DistanceRange,
 }
 
 impl LedIndicator {
@@ -77,13 +82,18 @@ impl LedIndicator {
 impl DistanceIndicator for LedIndicator {
     type Error = ();
 
-    fn update_range(&mut self, current_distance: u64, target_distance: u64, tolerance: u64) -> Result<DistanceRange, Self::Error> {
+    fn update_range(
+        &mut self,
+        current_distance: u64,
+        target_distance: u64,
+        tolerance: u64,
+    ) -> Result<DistanceRange, Self::Error> {
         let range = match current_distance {
             d if d < target_distance - 2 * tolerance => DistanceRange::Short,
             d if d < target_distance - tolerance => DistanceRange::OkShort,
             d if d > target_distance + tolerance => DistanceRange::OkLong,
             d if d > target_distance + 2 * tolerance => DistanceRange::Long,
-            _ => DistanceRange::Ok
+            _ => DistanceRange::Ok,
         };
 
         if range != self.range {
