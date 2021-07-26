@@ -27,7 +27,10 @@ const ADDRESS: u16 = 0x1234;
 const ADDRESS: u16 = 0x1235;
 
 #[cfg(feature = "anchor")]
-const CTRL_PERIOD: u32 = 64_000_000;
+const CTRL_PERIOD: u32 = 6_400_000;
+#[cfg(feature = "tag")]
+const CTRL_PERIOD: u32 = 3_200_000;
+const CTRL_PERIOD_SLOW: u32 = 10_000_000;
 const BATTERY_PERIOD: u32 = 256_000_000;
 
 #[app(device = stm32f1xx_hal::stm32, monotonic = rtic::cyccnt::CYCCNT, peripherals = true)]
@@ -37,9 +40,11 @@ const APP: () = {
         led1: Led1Type,
         indicator: LedIndicator,
         battery_monitor: BatteryMonitor,
+        ping_seen: bool,
+        valid_response_seen: bool,
     }
 
-    #[init(spawn = [control, start_receiving, check_battery_voltage])]
+    #[init(spawn = [control_tag, control_anchor, start_receiving, check_battery_voltage])]
     fn init(mut cx: init::Context) -> init::LateResources {
         cx.core.DWT.enable_cycle_counter();
 
@@ -60,17 +65,21 @@ const APP: () = {
             )
             .expect("Failed to set address");
 
-        cx.spawn.start_receiving().unwrap();
         cx.spawn.check_battery_voltage().unwrap();
 
         #[cfg(feature = "anchor")]
-        cx.spawn.control().unwrap();
+        cx.spawn.control_anchor().unwrap();
+
+        #[cfg(feature = "tag")]
+        cx.spawn.control_tag().unwrap();
 
         init::LateResources {
             dw1000: Dw1000Wrapper::new(dw1000, irq),
             led1,
             indicator,
             battery_monitor,
+            ping_seen: false,
+            valid_response_seen: false,
         }
     }
 
@@ -126,23 +135,30 @@ const APP: () = {
         }
     }
 
-    #[task(resources = [dw1000, led1], spawn = [start_receiving, set_indicator])]
+    #[task(resources = [dw1000, led1, ping_seen, valid_response_seen], spawn = [start_receiving, set_indicator])]
     fn receive_message(cx: receive_message::Context) {
         let dw1000: &mut Dw1000Wrapper = cx.resources.dw1000;
         let led1: &mut Led1Type = cx.resources.led1;
-
-        defmt::info!("state before receive: {:?}", dw1000.get_state());
+        let ping_seen: &mut bool = cx.resources.ping_seen;
+        let valid_response_seen: &mut bool = cx.resources.valid_response_seen;
 
         match dw1000.receive_message() {
-            Ok(Dw1000MessageType::RangingResponse) => {
-                led1.toggle().unwrap();
-                let average_distance = dw1000.get_average_distance();
-                defmt::info!(
-                    "Received ranging response: {:?}cm ==> New filtered distance: {:?}cm",
-                    dw1000.get_last_distance(),
-                    average_distance
-                );
-                cx.spawn.set_indicator(average_distance, 100, 20).unwrap();
+            Ok(Dw1000MessageType::RangingResponse(valid)) => {
+                if valid {
+                    led1.toggle().unwrap();
+                    let average_distance = dw1000.get_average_distance();
+                    defmt::info!(
+                        "Received ranging response: {:?}cm ==> New filtered distance: {:?}cm",
+                        dw1000.get_last_distance(),
+                        average_distance
+                    );
+                    *valid_response_seen = true;
+                    cx.spawn.set_indicator(average_distance, 100, 20).unwrap();
+                }
+            }
+            Ok(Dw1000MessageType::Ping) => {
+                defmt::info!("Received ping");
+                *ping_seen = true;
             }
             Ok(message_type) => defmt::info!("Received message: {:?}", message_type),
             Err(Error::InvalidState) => {
@@ -150,7 +166,7 @@ const APP: () = {
             }
             Err(e) => defmt::error!("receive_message: {:?}", e),
         };
-        defmt::info!("after receive_message state: {:?}", dw1000.get_state());
+
         if dw1000.get_state() != Dw1000State::Sending {
             cx.spawn.start_receiving().unwrap();
         }
@@ -225,35 +241,92 @@ const APP: () = {
         }
     }
 
-    #[cfg(feature = "anchor")]
-    #[task(schedule = [control], spawn = [start_receiving, finish_receiving, send_ping], resources = [dw1000])]
-    fn control(cx: control::Context) {
-        #[cfg(feature = "anchor")]
+    #[task(schedule = [control_anchor], spawn = [start_receiving, finish_receiving, send_ping], resources = [dw1000])]
+    fn control_anchor(cx: control_anchor::Context) {
         static mut COUNT: u8 = 0;
-        #[cfg(feature = "anchor")]
-        static mut RX_ACTIVE: bool = false;
 
         let dw1000: &mut Dw1000Wrapper = cx.resources.dw1000;
 
         if let Dw1000State::Receiving = dw1000.get_state() {
-            if !*RX_ACTIVE {
-                *COUNT = 0
-            }
+            cx.spawn.finish_receiving().unwrap();
+        }
 
-            *RX_ACTIVE = true;
-
-            if *COUNT == 2 {
-                cx.spawn.finish_receiving().unwrap();
-                cx.spawn.send_ping().unwrap();
-            } else {
-                *COUNT += 1;
-            }
+        if *COUNT == 5 {
+            *COUNT = 0;
+            cx.spawn.send_ping().unwrap();
         } else {
-            *RX_ACTIVE = false;
+            *COUNT += 1;
         }
 
         cx.schedule
-            .control(cx.scheduled + CTRL_PERIOD.cycles())
+            .control_anchor(cx.scheduled + CTRL_PERIOD.cycles())
+            .unwrap();
+    }
+
+    #[task(schedule = [control_tag], spawn = [start_receiving, finish_receiving, send_ping], resources = [ping_seen, indicator, valid_response_seen])]
+    fn control_tag(cx: control_tag::Context) {
+        static mut COUNT: u8 = 0;
+        static mut CYCLES_SINCE_PING: u8 = 255;
+        static mut CYCLES_SINCE_VALID_RESPONSE: u8 = 255;
+        static mut ANCHOR_DETECTED: bool = false;
+
+        let indicator: &mut LedIndicator = cx.resources.indicator;
+
+        let ping_seen: &mut bool = cx.resources.ping_seen;
+        let valid_response_seen: &mut bool = cx.resources.valid_response_seen;
+
+        // Anchor detection
+        if *ping_seen {
+            *ANCHOR_DETECTED = true;
+            *CYCLES_SINCE_PING = 0;
+        } else {
+            *CYCLES_SINCE_PING += 1;
+        }
+
+        if *CYCLES_SINCE_PING > 50 && *ANCHOR_DETECTED {
+            indicator.set_out_of_range();
+            *ANCHOR_DETECTED = false;
+        }
+
+        if *COUNT == 10 || *ping_seen {
+            *COUNT = 0;
+        } else {
+            *COUNT += 1;
+        }
+
+        *ping_seen = false;
+
+        // Valid response detection
+        if *valid_response_seen {
+            *CYCLES_SINCE_VALID_RESPONSE = 0;
+        } else {
+            *CYCLES_SINCE_VALID_RESPONSE = (*CYCLES_SINCE_VALID_RESPONSE).saturating_add(1);
+        }
+
+        if *CYCLES_SINCE_VALID_RESPONSE > 50 {
+            indicator.set_out_of_range();
+        }
+
+        *valid_response_seen = false;
+
+        let delay_cycles = if *ANCHOR_DETECTED {
+            match *COUNT {
+                1 => cx.spawn.finish_receiving().unwrap(),
+                9 => cx.spawn.start_receiving().unwrap(),
+                _ => (),
+            }
+            CTRL_PERIOD.cycles()
+        } else {
+            match *COUNT {
+                4 => cx.spawn.finish_receiving().unwrap(),
+                0 => cx.spawn.start_receiving().unwrap(),
+                _ => (),
+            }
+            CTRL_PERIOD_SLOW.cycles()
+        };
+
+        cx.schedule
+            .control_tag(cx.scheduled + delay_cycles)
             .unwrap();
     }
 

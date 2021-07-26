@@ -18,7 +18,7 @@ pub enum Dw1000State {
 pub enum Dw1000MessageType {
     Ping,
     RangingRequest,
-    RangingResponse,
+    RangingResponse(bool),
     Unknown,
 }
 
@@ -219,6 +219,8 @@ impl Dw1000Wrapper {
                     request_rtt
                 );
 
+                let mut valid = false;
+
                 // If this is not a PAN ID and short address, it doesn't
                 // come from a compatible node. Ignore it.
                 if let mac::Address::Short(pan_id, addr) = response.source {
@@ -237,6 +239,7 @@ impl Dw1000Wrapper {
                                 distance_cm
                             );
                             self.update_distance(corrected_distance);
+                            valid = true;
                         }
                         Ok(distance_mm) => defmt::warn!("Computed distance too large: {:?}mm", distance_mm),
                         Err(_) => {
@@ -249,7 +252,7 @@ impl Dw1000Wrapper {
                     }
                 }
                 self.dw1000_ready = Some(dw1000);
-                Ok(Dw1000MessageType::RangingResponse)
+                Ok(Dw1000MessageType::RangingResponse(valid))
             } else {
                 defmt::info!("Ignoring unknown message");
                 self.dw1000_ready = Some(dw1000);
