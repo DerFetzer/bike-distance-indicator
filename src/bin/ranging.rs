@@ -272,7 +272,7 @@ const APP: () = {
             .unwrap();
     }
 
-    #[task(schedule = [control_tag], spawn = [start_receiving, finish_receiving, send_ping], resources = [ping_seen, indicator, valid_response_seen])]
+    #[task(schedule = [control_tag], spawn = [start_receiving, finish_receiving], resources = [ping_seen, indicator, valid_response_seen])]
     fn control_tag(cx: control_tag::Context) {
         static mut COUNT: u8 = 0;
         static mut CYCLES_SINCE_PING: u8 = 255;
