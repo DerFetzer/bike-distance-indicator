@@ -1,7 +1,7 @@
 use crate::helper::get_delay;
 use crate::types::{DwIrqType, DwTypeReady, Led1Type};
 use dw1000::DW1000;
-use embedded_hal::digital::v2::OutputPin;
+use embedded_hal::digital::v2::{OutputPin, InputPin};
 use embedded_hal::spi::MODE_0;
 use stm32f1xx_hal::pac::SPI1;
 use stm32f1xx_hal::spi::Spi;
@@ -20,6 +20,8 @@ pub fn init_hardware(
     // Workaround for probe-run wfi issue
     dp.DBGMCU.cr.write(|w| w.dbg_sleep().set_bit());
     dp.RCC.ahbenr.write(|w| w.dma1en().set_bit());
+
+    let mut delay = get_delay();
 
     // Take ownership over the raw flash and rcc devices and convert them into the corresponding
     // HAL structs
@@ -46,9 +48,13 @@ pub fn init_hardware(
 
     defmt::info!("Init pins");
 
-    let mut rst = gpiob
-        .pb12
-        .into_open_drain_output_with_state(&mut gpiob.crh, State::Low);
+    let rst_inp = gpiob
+        .pb12.into_floating_input(&mut gpiob.crh);
+
+    while rst_inp.is_low().unwrap() {}
+    delay.delay_ms(10u32);
+
+    let mut rst = rst_inp.into_open_drain_output_with_state(&mut gpiob.crh, State::Low);
 
     let spi_pins = (
         gpioa.pa5.into_alternate_push_pull(&mut gpioa.crl),
@@ -107,8 +113,6 @@ pub fn init_hardware(
     let battery_monitor = BatteryMonitor::new(adc, bat_pin);
 
     defmt::info!("Init DW1000");
-
-    let mut delay = get_delay();
 
     delay.delay_ms(10u32); // Reset
     rst.set_high().unwrap();
