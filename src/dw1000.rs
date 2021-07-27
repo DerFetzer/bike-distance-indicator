@@ -43,7 +43,7 @@ impl Dw1000Wrapper {
 
     pub fn start_receiving(&mut self) -> Result<(), Error> {
         if let Some(dw1000) = self.dw1000_ready.take() {
-            defmt::info!("Start receiving");
+            defmt::debug!("Start receiving");
 
             let receiving = dw1000
                 .receive(RxConfig::default())
@@ -75,7 +75,7 @@ impl Dw1000Wrapper {
 
     pub fn finish_receiving(&mut self) -> Result<(), Error> {
         if let Some(dw1000) = self.dw1000_receiving.take() {
-            defmt::info!("Finish receiving");
+            defmt::debug!("Finish receiving");
 
             let ready = dw1000.finish_receiving().map_err(|(receiving, e)| {
                 self.dw1000_receiving = Some(receiving);
@@ -94,7 +94,7 @@ impl Dw1000Wrapper {
 
     pub fn finish_sending(&mut self) -> Result<(), Error> {
         if let Some(dw1000) = self.dw1000_sending.take() {
-            defmt::info!("Finish sending");
+            defmt::debug!("Finish sending");
 
             let ready = dw1000.finish_sending().map_err(|(sending, e)| {
                 self.dw1000_sending = Some(sending);
@@ -115,7 +115,7 @@ impl Dw1000Wrapper {
         if let Some(mut dw1000) = self.dw1000_receiving.take() {
             let mut buf = [0; 128];
 
-            defmt::info!("Receive message");
+            defmt::debug!("Receive message");
 
             delay.delay_us(1000u32);
 
@@ -131,8 +131,7 @@ impl Dw1000Wrapper {
                             defmt::warn!("receive_message retry");
 
                             let sys_status = dw1000.ll().sys_status().read().unwrap();
-                            defmt::info!("dw1000: {:?}", defmt::Debug2Format(&sys_status));
-                            defmt::info!(
+                            defmt::warn!(
                                 "ldedone: {:?}, rxdfr: {:?}, rxfcg: {:?}, rxfce: {}, ldeerr: {:?}",
                                 sys_status.ldedone(),
                                 sys_status.rxdfr(),
@@ -174,7 +173,7 @@ impl Dw1000Wrapper {
             let response = ranging::Response::decode::<DwSpiType, DwCsType>(&message);
 
             if let Ok(Some(ping)) = ping {
-                defmt::info!("Sending ranging request...");
+                defmt::debug!("Sending ranging request...");
 
                 delay.delay_ms(10u32);
 
@@ -191,7 +190,7 @@ impl Dw1000Wrapper {
                 self.dw1000_sending = Some(sending);
                 Ok(Dw1000MessageType::Ping)
             } else if let Ok(Some(request)) = request {
-                defmt::info!("Sending ranging response...");
+                defmt::debug!("Sending ranging response...");
 
                 delay.delay_ms(10u32);
 
@@ -208,24 +207,7 @@ impl Dw1000Wrapper {
                 self.dw1000_sending = Some(sending);
                 Ok(Dw1000MessageType::RangingRequest)
             } else if let Ok(Some(response)) = response {
-                defmt::info!("Received ranging response");
-
-                let ping_rt = response.payload.ping_reply_time.value();
-                let ping_rtt = response.payload.ping_round_trip_time.value();
-                let request_rt = response.payload.request_reply_time.value();
-                let request_rtt = response
-                    .rx_time
-                    .duration_since(response.payload.request_tx_time)
-                    .value();
-
-                defmt::debug!(
-                    "ping_rt: {:?} ping_rtt: {:?} request_rt: {:?} request_rtt: {:?}",
-                    ping_rt,
-                    ping_rtt,
-                    request_rt,
-                    request_rtt
-                );
-
+                defmt::debug!("Received ranging response");
                 let mut valid = false;
 
                 // If this is not a PAN ID and short address, it doesn't
@@ -238,7 +220,7 @@ impl Dw1000Wrapper {
                         Ok(distance_mm) if distance_mm < 20_000 => {
                             let distance_cm = distance_mm / 10;
                             let corrected_distance = Dw1000Wrapper::correct_distance(distance_cm);
-                            defmt::info!(
+                            defmt::debug!(
                                 "{:04x}:{:04x} - {} cm - uncorrected {} cm",
                                 pan_id.0,
                                 addr.0,
@@ -263,7 +245,7 @@ impl Dw1000Wrapper {
                 self.dw1000_ready = Some(dw1000);
                 Ok(Dw1000MessageType::RangingResponse(valid))
             } else {
-                defmt::info!("Ignoring unknown message");
+                defmt::warn!("Ignoring unknown message");
                 self.dw1000_ready = Some(dw1000);
                 Ok(Dw1000MessageType::Unknown)
             }
@@ -307,7 +289,7 @@ impl Dw1000Wrapper {
 
     pub fn send_ping(&mut self) -> Result<(), Error> {
         if let Some(mut dw1000) = self.dw1000_ready.take() {
-            defmt::info!("Sending ping...");
+            defmt::debug!("Sending ping...");
 
             let result = ranging::Ping::new(&mut dw1000);
 
