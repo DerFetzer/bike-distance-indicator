@@ -4,7 +4,7 @@ use crate::types::{DwCsType, DwIrqType, DwSpiType, DwTypeReady, DwTypeReceiving,
 use defmt::Format;
 use dw1000::ranging::Message;
 use dw1000::{mac, ranging, RxConfig};
-use embedded_hal::blocking::delay::{DelayMs, DelayUs};
+use embedded_hal::blocking::delay::DelayUs;
 use stm32f1xx_hal::gpio::ExtiPin;
 
 #[derive(Debug, Clone, Copy, PartialEq, Format)]
@@ -165,8 +165,6 @@ impl Dw1000Wrapper {
     }
 
     fn handle_message(&mut self, message: dw1000::hl::Message) -> Result<Dw1000MessageType, Error> {
-        let mut delay = get_delay();
-
         if let Some(mut dw1000) = self.dw1000_ready.take() {
             let ping = ranging::Ping::decode::<DwSpiType, DwCsType>(&message);
             let request = ranging::Request::decode::<DwSpiType, DwCsType>(&message);
@@ -174,8 +172,6 @@ impl Dw1000Wrapper {
 
             if let Ok(Some(ping)) = ping {
                 defmt::debug!("Sending ranging request...");
-
-                delay.delay_ms(10u32);
 
                 let result = ranging::Request::new(&mut dw1000, &ping);
 
@@ -191,8 +187,6 @@ impl Dw1000Wrapper {
                 Ok(Dw1000MessageType::Ping)
             } else if let Ok(Some(request)) = request {
                 defmt::debug!("Sending ranging response...");
-
-                delay.delay_ms(10u32);
 
                 let result = ranging::Response::new(&mut dw1000, &request);
 
