@@ -297,8 +297,10 @@ const APP: () = {
             *ANCHOR_DETECTED = false;
         }
 
-        if *COUNT == 10 || *ping_seen {
+        if *COUNT == 10 {
             *COUNT = 0;
+        } else if *ping_seen {
+            *COUNT = 1;
         } else {
             *COUNT += 1;
         }
@@ -312,7 +314,7 @@ const APP: () = {
             *CYCLES_SINCE_VALID_RESPONSE = (*CYCLES_SINCE_VALID_RESPONSE).saturating_add(1);
         }
 
-        if *CYCLES_SINCE_VALID_RESPONSE > 50 {
+        if *CYCLES_SINCE_VALID_RESPONSE > 100 {
             indicator.set_out_of_range();
         }
 
@@ -320,8 +322,8 @@ const APP: () = {
 
         let delay_cycles = if *ANCHOR_DETECTED {
             match *COUNT {
-                1 => cx.spawn.finish_receiving().unwrap(),
-                9 => cx.spawn.start_receiving().unwrap(),
+                3 => cx.spawn.finish_receiving().unwrap(),
+                0 => cx.spawn.start_receiving().unwrap(),
                 _ => (),
             }
             CTRL_PERIOD.cycles()
